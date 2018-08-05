@@ -4,6 +4,8 @@ import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
 
+from pyrrent.utils import Cache
+
 
 class StorageError(Exception):
     pass
@@ -29,13 +31,13 @@ class Storage:
         self._base_path = base_path
         self._handlers = {}
 
-    def create_handler_for_download(self, download_name, workers=3, loop=None):
+    def create_handler_for_download(self, download_name, workers=3, cache_size=100, loop=None):
         logging.info(f'Creating handler for download {download_name}')
         if download_name in self._handlers:
             raise StorageError(f'Download {download_name} already active')
 
         download_path = os.path.join(self._base_path, download_name)
-        handler = StorageHandler.create(download_path, workers, loop)
+        handler = StorageHandler.create(download_path, workers, cache_size, loop)
         self._handlers[download_name] = handler
 
         return handler
@@ -47,7 +49,7 @@ class Storage:
 
 class StorageHandler:
     @classmethod
-    def create(cls, path, workers, loop):
+    def create(cls, path, workers, cache_size, loop):
         pieces_path = os.path.join(path, '.pieces')
         if not os.path.exists(pieces_path):
             try:
@@ -58,20 +60,28 @@ class StorageHandler:
         else:
             _check_ownership_and_permissions(pieces_path)
 
-        return cls(path, pieces_path, workers, loop)
+        return cls(path, pieces_path, workers, cache_size, loop)
 
 
-    def __init__(self, path, pieces_path, workers, loop):
+    def __init__(self, path, pieces_path, workers, cache_size, loop):
         self._path = path
         self._pieces_path = pieces_path
         self._loop = loop or asyncio.get_event_loop()
         self._pool = ThreadPoolExecutor(max_workers=workers)
+        self._cache = Cache(cache_size)
 
     async def store(self, piece_index, piece_data):
         await self._loop.run_in_executor(self._pool, self._store, piece_index, piece_data)
 
     async def retrieve(self, piece_index):
-        return await self._loop.run_in_executor(self._pool, self._retrieve, piece_index)
+        data = self._cache.get(piece_index)
+        if data:
+            return data
+
+        data = await self._loop.run_in_executor(self._pool, self._retrieve, piece_index)
+        self._cache.put(piece_index, data)
+
+        return data
 
     def _store(self, piece_index, piece_data):
         piece_path = self._get_piece_path(piece_index)

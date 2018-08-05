@@ -7,6 +7,9 @@ class Cache:
         self._records = {}
 
     def put(self, key, data):
+        if key in self._records:
+            return
+
         if len(self._records) == self._max_record_count:
             self._purge()
 

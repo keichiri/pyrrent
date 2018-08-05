@@ -61,3 +61,20 @@ class StorageTests(unittest.TestCase):
         retrieved_piece_content = self.loop.run_until_complete(self.storage_handler.retrieve(piece_index))
 
         self.assertEqual(retrieved_piece_content, piece_content)
+
+    def test_retrieve_piece_returns_cached(self):
+        # Checks if piece is retrieved from cache by deleting it from file system between 2 reads
+        piece_index = 1000
+        piece_content = b'test_piece_data'
+        piece_path = os.path.join(self.TEST_PATH, 'test_download/.pieces/1000.piece')
+        with open(piece_path, 'wb') as f:
+            f.write(piece_content)
+
+        retrieved_piece_content = self.loop.run_until_complete(self.storage_handler.retrieve(piece_index))
+        self.assertEqual(retrieved_piece_content, piece_content)
+
+        os.remove(piece_path)
+
+        retrieved_piece_content = self.loop.run_until_complete(self.storage_handler.retrieve(piece_index))
+        self.assertEqual(retrieved_piece_content, piece_content)
+
