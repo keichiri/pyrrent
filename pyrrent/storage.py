@@ -83,8 +83,14 @@ class StorageHandler:
 
         return data
 
+    # NOTE - assumes all the pieces are download, does not perform checks. For example it could
+    # list all pieces, multiply by full piece length and check if enough to fill all files
+    async def compose_files(self, file_infos):
+        await self._loop.run_in_executor(self._pool, self._compose_files, file_infos)
+
     def _store(self, piece_index, piece_data):
         piece_path = self._get_piece_path(piece_index)
+        logging.debug(f'Storing piece with index {piece_index} at path {piece_path}')
 
         try:
             with open(piece_path, 'wb') as f:
@@ -94,6 +100,7 @@ class StorageHandler:
 
     def _retrieve(self, piece_index):
         piece_path = self._get_piece_path(piece_index)
+        logging.debug(f'Retrieving piece with index {piece_index} from path {piece_path}')
 
         try:
             with open(piece_path, 'rb') as f:
@@ -103,8 +110,53 @@ class StorageHandler:
 
         return content
 
+    # TODO - add cleanup and retries here. Long operation so it is good to be resilient as possible
+    # TODO - check if last piece is completely used, meaning total file size and total piece size are equal
+    def _compose_files(self, file_infos):
+        logging.info(f'Composing files at path: {self._path}')
+        piece_file_names = self._list_piece_file_names()
+        piece_index = 0
+        piece_offset = 0
+
+        try:
+            for file in file_infos:
+                file_path = os.path.join(self._path, file.path)
+                file_dir = os.path.dirname(file_path)
+                if not os.path.exists(file_dir):
+                    os.makedirs(file_dir, 0o700)
+
+                with open(file_path, 'wb') as f:
+                    to_write = file.size
+
+                    while to_write:
+                        piece_file_name = piece_file_names[piece_index]
+                        piece_path = os.path.join(self._pieces_path, piece_file_name)
+
+                        with open(piece_path, 'rb') as pf:
+                            pf.seek(piece_offset)
+                            content = pf.read(to_write)
+
+                        f.write(content)
+                        to_write -= len(content)
+                        if to_write:
+                            piece_index += 1
+                            piece_offset = 0
+                        else:
+                            piece_offset += len(content)
+        except OSError as e:
+            raise StorageError(f'Error occurred while composing files') from e
+
     def _get_piece_path(self, piece_index):
         return os.path.join(self._pieces_path, f'{piece_index}.piece')
+
+    def _list_piece_file_names(self):
+        try:
+            piece_names = os.listdir(self._pieces_path)
+        except OSError as e:
+            raise StorageError(f'Failed to list piece files') from e
+
+        piece_names.sort(key=lambda name: int(name.split('.')[0]))
+        return piece_names
 
 
 def _check_ownership_and_permissions(path):
